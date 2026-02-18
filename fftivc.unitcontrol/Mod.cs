@@ -8,11 +8,8 @@ using Reloaded.Hooks.ReloadedII.Interfaces;
 using Reloaded.Memory;
 using Reloaded.Memory.SigScan.ReloadedII.Interfaces;
 using Reloaded.Mod.Interfaces;
-
-#if DEBUG
 using System.Diagnostics;
 using System.Drawing;
-#endif
 
 namespace fftivc.unitcontrol
 {
