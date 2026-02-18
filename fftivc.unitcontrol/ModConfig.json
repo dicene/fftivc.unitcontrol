@@ -1,0 +1,26 @@
+{
+  "ModId": "fftivc.unitcontrol",
+  "ModName": "Unit Control",
+  "ModAuthor": "Dicene",
+  "ModVersion": "1.0.0",
+  "ModDescription": "Change human vs computer control of your units, guests, and enemy units.",
+  "ModDll": "fftivc.unitcontrol.dll",
+  "ModIcon": "Preview.png",
+  "ModR2RManagedDll32": "x86/fftivc.unitcontrol.dll",
+  "ModR2RManagedDll64": "x64/fftivc.unitcontrol.dll",
+  "ModNativeDll32": "",
+  "ModNativeDll64": "",
+  "IsLibrary": false,
+  "ReleaseMetadataFileName": "fftivc.unitcontrol.ReleaseMetadata.json",
+  "PluginData": {},
+  "IsUniversalMod": false,
+  "ModDependencies": [
+    "Reloaded.Memory.SigScan.ReloadedII",
+    "reloaded.sharedlib.hooks",
+    "SharedScans.Reloaded",
+    "ff16.utility.framework"
+  ],
+  "OptionalDependencies": [],
+  "SupportedAppId": [ "fft_enhanced.exe" ],
+  "ProjectUrl": ""
+}
