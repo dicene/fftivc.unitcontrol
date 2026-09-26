@@ -71,7 +71,8 @@ namespace fftivc.unitcontrol
         {
             var ret = TransitionIntoBattle_Hook.OriginalFunction(a1, a2, a3, a4);
 
-            UpdateUnitControl();
+            // Battle setup - runs once per battle, so dump the full roster here.
+            UpdateUnitControl(verbose: true);
 
             return ret;
         }
@@ -89,6 +90,11 @@ namespace fftivc.unitcontrol
         [Function(CallingConventions.Microsoft)]
         private delegate Int64 NewEntry(Int64 x, Int64 y, Int64 facingHi, Int64 facingLo, Int64 job, Int64 a6, Int64 a7, Int64 pBattleUnit, Int64 flag);
         private IHook<NewEntry> NewEntry_Hook;
+
+        /// <summary>Period of the periodic re-apply backstop, in milliseconds.</summary>
+        private const int ReapplyIntervalMs = 1000;
+
+        private System.Threading.Timer? _reapplyTimer;
 
         /// <summary>
         /// Fires for every unit that appears on the field - battle start and mid-battle alike - and
@@ -110,7 +116,8 @@ namespace fftivc.unitcontrol
         {
             var ret = NewEntry_Hook.OriginalFunction(x, y, facingHi, facingLo, job, a6, a7, pBattleUnit, flag);
 
-            UpdateUnitControl();
+            // Fires once per unit placed, so stay quiet - only actual control changes get logged.
+            UpdateUnitControl(verbose: false);
 
             return ret;
         }
@@ -255,6 +262,12 @@ namespace fftivc.unitcontrol
             settingsMenu.imGui = imGui;
             imGuiShell.AddComponent(settingsMenu);
 
+            // Backstop so a unit added through a placement path we have not hooked still gets covered.
+            // Deliberately not driven from the ImGui component's Render(): that only ticks while the
+            // overlay is actually visible (IsOverlay is false here), so closing the overlay would
+            // silently disable it. See OnReapplyTick for why running it off-thread is cheap.
+            _reapplyTimer = new System.Threading.Timer(_ => OnReapplyTick(), null, ReapplyIntervalMs, ReapplyIntervalMs);
+
             _logger.WriteLine($"[{_modConfig.ModId}] UnitControl loaded...");
         }
 
@@ -274,7 +287,9 @@ namespace fftivc.unitcontrol
         public void ApplyConfiguration()
         {
             _configuration.Save?.Invoke();
-            UpdateUnitControl();
+
+            // User-initiated, so show the full roster alongside any changes.
+            UpdateUnitControl(verbose: true);
         }
 
         /// <summary>
@@ -286,7 +301,39 @@ namespace fftivc.unitcontrol
             ApplyConfiguration();
         }
 
-        public void UpdateUnitControl()
+        /// <summary>
+        /// Periodic backstop that re-applies the configuration without depending on any hook firing.
+        /// <para>
+        /// The hooks only cover the unit placement paths that have been identified, so a unit added
+        /// through a path we have not found - a scripted reinforcement, for example - would otherwise
+        /// keep whatever control state the game gave it. <see cref="SetUnitControlled"/> returns early
+        /// for units already in the requested state, so once everything has converged this performs
+        /// zero writes and only the 21 x 6 flag reads.
+        /// </para>
+        /// </summary>
+        private void OnReapplyTick()
+        {
+            try
+            {
+                UpdateUnitControl(verbose: false);
+            }
+            catch (Exception ex)
+            {
+                // A background tick must never take the game down with it.
+                if (_configuration.LoggingEnabled) _logger.WriteLine($"[{_modConfig.ModId}] Reapply tick failed: {ex.Message}", Color.OrangeRed);
+            }
+        }
+
+        /// <summary>
+        /// Brings every battle unit in line with the configuration.
+        /// </summary>
+        /// <param name="verbose">
+        /// When <c>true</c>, logs every live unit and its flags before applying anything. That listing
+        /// is diagnostic output, so it is reserved for the rare entry points (battle transition and
+        /// config change); the per-placement hook and the periodic backstop stay quiet and only log
+        /// the control changes they actually make.
+        /// </param>
+        public void UpdateUnitControl(bool verbose = false)
         {
             if (BattleUnitsBaseAddress == 0)
             {
@@ -323,18 +370,18 @@ namespace fftivc.unitcontrol
 
                 if (isGuest)
                 {
-                    if (configuration.LoggingEnabled) _logger.WriteLine($"{i:d2}.) Guest        SpriteSet:0x{spriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{job:X2}, Flags1:0x{flags1:X2}, Flags2:0x{flags2:X2}, Flags2Copy:0x{flags2Mirror:X2}", Color.Goldenrod);
+                    if (verbose && configuration.LoggingEnabled) _logger.WriteLine($"{i:d2}.) Guest        SpriteSet:0x{spriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{job:X2}, Flags1:0x{flags1:X2}, Flags2:0x{flags2:X2}, Flags2Copy:0x{flags2Mirror:X2}", Color.Goldenrod);
                     SetUnitControlled(pBattleUnit, flags2, flags2Mirror, combinedFlags2, configuration.ControlGuests, "guest", unitIndex);
                 }
                 else if ((combinedFlags2 & BattleUnits.Flags2EnemyMask) != 0)
                 {
                     // Marked as Team 1 or Team 2
-                    if (configuration.LoggingEnabled) _logger.WriteLine($"{i:d2}.) Enemy        SpriteSet:0x{spriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{job:X2}, Flags1:0x{flags1:X2}, Flags2:0x{flags2:X2}, Flags2Copy:0x{flags2Mirror:X2}", Color.Salmon);
+                    if (verbose && configuration.LoggingEnabled) _logger.WriteLine($"{i:d2}.) Enemy        SpriteSet:0x{spriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{job:X2}, Flags1:0x{flags1:X2}, Flags2:0x{flags2:X2}, Flags2Copy:0x{flags2Mirror:X2}", Color.Salmon);
                     SetUnitControlled(pBattleUnit, flags2, flags2Mirror, combinedFlags2, configuration.ControlEnemies, "enemy", unitIndex);
                 }
                 else
                 {
-                    if (configuration.LoggingEnabled) _logger.WriteLine($"{i:d2}.) Player       SpriteSet:0x{spriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{job:X2}, Flags1:0x{flags1:X2}, Flags2:0x{flags2:X2}, Flags2Copy:0x{flags2Mirror:X2}", Color.Green);
+                    if (verbose && configuration.LoggingEnabled) _logger.WriteLine($"{i:d2}.) Player       SpriteSet:0x{spriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{job:X2}, Flags1:0x{flags1:X2}, Flags2:0x{flags2:X2}, Flags2Copy:0x{flags2Mirror:X2}", Color.Green);
                     SetUnitControlled(pBattleUnit, flags2, flags2Mirror, combinedFlags2, configuration.ControlPlayerUnits, "player unit", unitIndex);
                 }
             }
@@ -359,6 +406,12 @@ namespace fftivc.unitcontrol
         }
 
         #region Standard Overrides
+        public override void Disposing()
+        {
+            _reapplyTimer?.Dispose();
+            _reapplyTimer = null;
+        }
+
         public override void ConfigurationUpdated(Config configuration)
         {
             var previous = _configuration;
