@@ -51,6 +51,17 @@ namespace fftivc.unitcontrol
 
         UIntPtr BattleUnitsBaseAddress;
 
+        /// <summary>
+        /// Offset from the start of the <c>BattleUnitsBase</c> AOB match to the
+        /// <c>lea r15, [rip+disp32]</c> instruction that computes the battle unit array address.
+        /// </summary>
+        private const int BattleUnitsPatternLeaOffset = 0x2A;
+
+        // The hooked function is really `char f(void)` - it never reads any of these four argument
+        // registers (it overwrites rcx/rdx/r8/r9 before use) and only defines the low byte of RAX.
+        // Declaring it as a pass-through Int64 deliberately preserves the full RAX as the caller
+        // would have seen it; narrowing this to `byte` would let the trampoline alter the upper
+        // bits. See sub_140216C04 in the 1.5.2 IDB.
         [Function(CallingConventions.Microsoft)]
         private delegate Int64 TransitionIntoBattle(Int64 a1, Int64 a2, Int64 a3, Int64 a4);
         private IHook<TransitionIntoBattle> TransitionIntoBattle_Hook;
@@ -106,7 +117,7 @@ namespace fftivc.unitcontrol
 
                 _logger.WriteLineAsync($"[{_modConfig.ModId}] BattleUnitsBase AOB found at 0x{battleUnitsBase_address:X}.", Color.LightGreen);
 
-                var lea_address = (nuint)(battleUnitsBase_address + 0x2a);
+                var lea_address = (nuint)(battleUnitsBase_address + BattleUnitsPatternLeaOffset);
                 _logger.WriteLineAsync($"[{_modConfig.ModId}] lea_address at 0x{lea_address:X}.", Color.LightGreen);
                 Memory.Instance.Read<int>(lea_address + 3, out int offsetAddress);
                 _logger.WriteLineAsync($"[{_modConfig.ModId}] offsetAddress at 0x{offsetAddress:X}.", Color.LightGreen);
@@ -114,7 +125,11 @@ namespace fftivc.unitcontrol
                 BattleUnitsBaseAddress = (nuint)((nint)lea_address + 7 + offsetAddress);
                 _logger.WriteLineAsync($"[{_modConfig.ModId}] BattleUnitsBase Address found at 0x{BattleUnitsBaseAddress:X}.", Color.LightGreen);
             };
-            startupScanner.AddMainModuleScan("48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 57 41 56 41 57 48 83 EC ?? 48 8B 05 ?? ?? ?? ?? 48 31 E0 48 89 44 24 ?? 48 63 F1 4C 8D 3D", findBattleUnitsBase);
+            // The instruction after the /GS cookie load is `xor rax, rsp`. MSVC encodes that as
+            // 48 31 E0 in FFT_enhanced 1.2.0 but as 48 33 C4 in 1.5.2, so the encoding is masked
+            // out. Both variants resolve to BattleUnits__bwork, and this pattern matches exactly
+            // once in both versions.
+            startupScanner.AddMainModuleScan("48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 57 41 56 41 57 48 83 EC ?? 48 8B 05 ?? ?? ?? ?? 48 ?? ?? 48 89 44 24 ?? 48 63 F1 4C 8D 3D", findBattleUnitsBase);
 
             Action<Reloaded.Memory.Sigscan.Definitions.Structs.PatternScanResult> TransitionIntoBattleAction = result =>
             {
@@ -208,74 +223,74 @@ namespace fftivc.unitcontrol
 
         public void UpdateUnitControl()
         {
-            if (BattleUnitsBaseAddress > 0)
+            if (BattleUnitsBaseAddress == 0)
             {
-                for (int i = 0; i < 23; i++)
+                return;
+            }
+
+            var configuration = _configuration;
+
+            for (int i = 0; i < BattleUnits.Capacity; i++)
+            {
+                var pBattleUnit = BattleUnitsBaseAddress + (nuint)(BattleUnits.Stride * i);
+                Memory.Instance.Read<byte>(pBattleUnit + BattleUnits.OffsetSpriteSet, out var spriteSet);
+                Memory.Instance.Read<byte>(pBattleUnit + BattleUnits.OffsetIndex, out var unitIndex);
+                Memory.Instance.Read<byte>(pBattleUnit + BattleUnits.OffsetJob, out var job);
+                Memory.Instance.Read<byte>(pBattleUnit + BattleUnits.OffsetFlags2, out var flags2);
+                Memory.Instance.Read<byte>(pBattleUnit + BattleUnits.OffsetFlags1, out var flags1);
+                Memory.Instance.Read<byte>(pBattleUnit + BattleUnits.OffsetFlags2Mirror, out var flags2Mirror);
+
+                if (unitIndex == BattleUnits.EmptyIndex)
                 {
-                    var pBattleUnit = BattleUnitsBaseAddress + (nuint)(0x200 * i);
-                    Memory.Instance.Read<byte>(pBattleUnit + 0x0, out var unitSpriteSet);
-                    Memory.Instance.Read<byte>(pBattleUnit + 0x1, out var unitIndex);
-                    Memory.Instance.Read<byte>(pBattleUnit + 0x3, out var unitJob);
-                    Memory.Instance.Read<byte>(pBattleUnit + 0x5, out var battleUnitFlags2);
-                    Memory.Instance.Read<byte>(pBattleUnit + 0x6, out var battleUnitFlags1);
-                    Memory.Instance.Read<byte>(pBattleUnit + 0x1EE, out var battleUnitFlags2Copy);
+                    continue;
+                }
 
-                    if (unitIndex == 0xFF)
-                    {
-                        continue;
-                    }
+                // Flags2 and its mirror at +0x1EE are two copies of the same byte for our purposes,
+                // so treat either copy being set as "set".
+                var combinedFlags2 = (byte)(flags2 | flags2Mirror);
 
-                    if ((battleUnitFlags1 & 0x9) != 0)
-                    {
-                        if (_configuration.LoggingEnabled) _logger.WriteLine($"{i:d2}.) Guest        SpriteSet:0x{unitSpriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{unitJob:X2}, Flags1:0x{battleUnitFlags1:X2}, Flags2:0x{battleUnitFlags2:X2}, Flags2Copy:0x{battleUnitFlags2Copy:X2}", Color.Goldenrod);
-                        if (_configuration.ControlGuests && ((battleUnitFlags2 | battleUnitFlags2Copy) & 0x8) == 0)
-                        {
-                            if (_configuration.LoggingEnabled) _logger.WriteLine($"                  Giving control of guest 0x{unitIndex:X2}...");
-                            Memory.Instance.Write<byte>(pBattleUnit + 0x5, (byte)(battleUnitFlags2 | 0x8));
-                            Memory.Instance.Write<byte>(pBattleUnit + 0x1EE, (byte)(battleUnitFlags2Copy | 0x8));
-                        }
-                        else if (!_configuration.ControlGuests && ((battleUnitFlags2 | battleUnitFlags2Copy) & 0x8) == 8)
-                        {
-                            if (_configuration.LoggingEnabled) _logger.WriteLine($"                  Removing control of guest 0x{unitIndex:X2}...");
-                            Memory.Instance.Write<byte>(pBattleUnit + 0x5, (byte)(battleUnitFlags2 & 0xF7));
-                            Memory.Instance.Write<byte>(pBattleUnit + 0x1EE, (byte)(battleUnitFlags2Copy & 0xF7));
-                        }
-                    }
-                    else if (((battleUnitFlags2 | battleUnitFlags2Copy) & 0x30) != 0)
-                    {
-                        if (_configuration.LoggingEnabled) _logger.WriteLine($"{i:d2}.) Enemy        SpriteSet:0x{unitSpriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{unitJob:X2}, Flags1:0x{battleUnitFlags1:X2}, Flags2:0x{battleUnitFlags2:X2}, Flags2Copy:0x{battleUnitFlags2Copy:X2}", Color.Salmon);
-                        if (_configuration.ControlEnemies && ((battleUnitFlags2 | battleUnitFlags2Copy) & 0x8) == 0)
-                        {
-                            // Marked as Team 1 or Team 2
-                            if (_configuration.LoggingEnabled) _logger.WriteLine($"                  Giving control of enemy 0x{unitIndex:X2}...");
-                            Memory.Instance.Write<byte>(pBattleUnit + 0x5, (byte)(battleUnitFlags2 | 0x8));
-                            Memory.Instance.Write<byte>(pBattleUnit + 0x1EE, (byte)(battleUnitFlags2Copy | 0x8));
-                        }
-                        else if (!_configuration.ControlEnemies && ((battleUnitFlags2 | battleUnitFlags2Copy) & 0x8) == 8)
-                        {
-                            if (_configuration.LoggingEnabled) _logger.WriteLine($"                  Removing control of enemy 0x{unitIndex:X2}...");
-                            Memory.Instance.Write<byte>(pBattleUnit + 0x5, (byte)(battleUnitFlags2 & 0xF7));
-                            Memory.Instance.Write<byte>(pBattleUnit + 0x1EE, (byte)(battleUnitFlags2Copy & 0xF7));
-                        }
-                    }
-                    else
-                    {
-                        if (_configuration.LoggingEnabled) _logger.WriteLine($"{i:d2}.) Player       SpriteSet:0x{unitSpriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{unitJob:X2}, Flags1:0x{battleUnitFlags1:X2}, Flags2:0x{battleUnitFlags2:X2}, Flags2Copy:0x{battleUnitFlags2Copy:X2}", Color.Green);
-                        if (_configuration.ControlPlayerUnits && ((battleUnitFlags2 | battleUnitFlags2Copy) & 0x8) == 0)
-                        {
-                            if (_configuration.LoggingEnabled) _logger.WriteLine($"                  Giving control of player unit 0x{unitIndex:X2}...");
-                            Memory.Instance.Write<byte>(pBattleUnit + 0x5, (byte)(battleUnitFlags2 | 0x8));
-                            Memory.Instance.Write<byte>(pBattleUnit + 0x1EE, (byte)(battleUnitFlags2Copy | 0x8));
-                        }
-                        else if (!_configuration.ControlPlayerUnits && ((battleUnitFlags2 | battleUnitFlags2Copy) & 0x8) == 8)
-                        {
-                            if (_configuration.LoggingEnabled) _logger.WriteLine($"                  Removing control of player unit 0x{unitIndex:X2}...");
-                            Memory.Instance.Write<byte>(pBattleUnit + 0x5, (byte)(battleUnitFlags2 & 0xF7));
-                            Memory.Instance.Write<byte>(pBattleUnit + 0x1EE, (byte)(battleUnitFlags2Copy & 0xF7));
-                        }
-                    }
+                // Mirrors the game's own guest/special-unit test: (Flags2 & 0x04) || (Flags1 & 0x09).
+                // See set_status_counter (0x140278CFE), unitwork_init2all (0x140278E55) and
+                // check_tobe_crystal (0x14030FA73). Those all read the +0x05 copy of Flags2, so this
+                // deliberately uses `flags2` rather than the combined byte used for the team test.
+                var isGuest = (flags1 & BattleUnits.Flags1GuestMask) != 0
+                           || (flags2 & BattleUnits.Flags2NonCrystalMask) != 0;
+
+                if (isGuest)
+                {
+                    if (configuration.LoggingEnabled) _logger.WriteLine($"{i:d2}.) Guest        SpriteSet:0x{spriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{job:X2}, Flags1:0x{flags1:X2}, Flags2:0x{flags2:X2}, Flags2Copy:0x{flags2Mirror:X2}", Color.Goldenrod);
+                    SetUnitControlled(pBattleUnit, flags2, flags2Mirror, combinedFlags2, configuration.ControlGuests, "guest", unitIndex);
+                }
+                else if ((combinedFlags2 & BattleUnits.Flags2EnemyMask) != 0)
+                {
+                    // Marked as Team 1 or Team 2
+                    if (configuration.LoggingEnabled) _logger.WriteLine($"{i:d2}.) Enemy        SpriteSet:0x{spriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{job:X2}, Flags1:0x{flags1:X2}, Flags2:0x{flags2:X2}, Flags2Copy:0x{flags2Mirror:X2}", Color.Salmon);
+                    SetUnitControlled(pBattleUnit, flags2, flags2Mirror, combinedFlags2, configuration.ControlEnemies, "enemy", unitIndex);
+                }
+                else
+                {
+                    if (configuration.LoggingEnabled) _logger.WriteLine($"{i:d2}.) Player       SpriteSet:0x{spriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{job:X2}, Flags1:0x{flags1:X2}, Flags2:0x{flags2:X2}, Flags2Copy:0x{flags2Mirror:X2}", Color.Green);
+                    SetUnitControlled(pBattleUnit, flags2, flags2Mirror, combinedFlags2, configuration.ControlPlayerUnits, "player unit", unitIndex);
                 }
             }
+        }
+
+        /// <summary>
+        /// Brings <c>Flags2</c> and its mirror at <c>+0x1EE</c> in line with
+        /// <paramref name="shouldControl"/>. Writes nothing when the unit already matches.
+        /// </summary>
+        private void SetUnitControlled(nuint pBattleUnit, byte flags2, byte flags2Mirror, byte combinedFlags2, bool shouldControl, string kind, byte unitIndex)
+        {
+            if (shouldControl == ((combinedFlags2 & BattleUnits.Flags2HumanControl) != 0))
+            {
+                return;
+            }
+
+            if (_configuration.LoggingEnabled) _logger.WriteLine($"                  {(shouldControl ? "Giving" : "Removing")} control of {kind} 0x{unitIndex:X2}...");
+
+            var control = BattleUnits.Flags2HumanControl;
+            Memory.Instance.Write<byte>(pBattleUnit + BattleUnits.OffsetFlags2, shouldControl ? (byte)(flags2 | control) : (byte)(flags2 & ~control));
+            Memory.Instance.Write<byte>(pBattleUnit + BattleUnits.OffsetFlags2Mirror, shouldControl ? (byte)(flags2Mirror | control) : (byte)(flags2Mirror & ~control));
         }
 
         #region Standard Overrides
