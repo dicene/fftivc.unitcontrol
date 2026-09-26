@@ -171,11 +171,39 @@ namespace fftivc.unitcontrol
             _logger.WriteLineAsync($"[{_modConfig.ModId}] {imGui}.");
             _logger.WriteLineAsync($"[{_modConfig.ModId}] {imGuiShell}.");
 
-            settingsMenu = new UnitControlSettingsMenu(this, _configuration);
+            settingsMenu = new UnitControlSettingsMenu(this);
             settingsMenu.imGui = imGui;
             imGuiShell.AddComponent(settingsMenu);
 
             _logger.WriteLine($"[{_modConfig.ModId}] UnitControl loaded...");
+        }
+
+        /// <summary>
+        /// The configuration instance currently in use.
+        /// <para>
+        /// The template swaps this out whenever the config file changes on disk, so always read it
+        /// through this property instead of caching it - a cached copy becomes stale (and detached
+        /// from its file watcher) as soon as anything writes to Config.json.
+        /// </para>
+        /// </summary>
+        public Config Configuration => _configuration;
+
+        /// <summary>
+        /// Persists the current configuration to disk and re-applies it to the battle in progress.
+        /// </summary>
+        public void ApplyConfiguration()
+        {
+            _configuration.Save?.Invoke();
+            UpdateUnitControl();
+        }
+
+        /// <summary>
+        /// Restores every setting to its default value, saves the result and re-applies it.
+        /// </summary>
+        public void ResetConfigurationToDefaults()
+        {
+            _configuration.ResetToDefaults();
+            ApplyConfiguration();
         }
 
         public void UpdateUnitControl()
