@@ -296,12 +296,24 @@ namespace fftivc.unitcontrol
         #region Standard Overrides
         public override void ConfigurationUpdated(Config configuration)
         {
-            // Apply settings from configuration.
-            // ... your code here.
+            var previous = _configuration;
             _configuration = configuration;
-            if (_configuration.LoggingEnabled) _logger.WriteLine($"[{_modConfig.ModId}] Config Updated: Applying");
 
-            UpdateUnitControl();
+            // The template reloads the config from disk on every write, including the writes we make
+            // ourselves from the settings overlay. Re-applying only when a value actually changed
+            // keeps a checkbox toggle down to a single pass over the units instead of running the
+            // loop a second time on the file watcher's thread.
+            var changed = previous.LoggingEnabled != configuration.LoggingEnabled
+                       || previous.ControlGuests != configuration.ControlGuests
+                       || previous.ControlEnemies != configuration.ControlEnemies
+                       || previous.ControlPlayerUnits != configuration.ControlPlayerUnits;
+
+            if (configuration.LoggingEnabled) _logger.WriteLine($"[{_modConfig.ModId}] Config Updated: {(changed ? "Applying" : "No change, skipping apply")}");
+
+            if (changed)
+            {
+                UpdateUnitControl();
+            }
         }
         #endregion
 

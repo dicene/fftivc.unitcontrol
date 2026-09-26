@@ -27,7 +27,7 @@ namespace fftivc.unitcontrol
 
         public void RenderMenu(IImGuiShell imGuiShell)
         {
-            if (imGui.MenuItem("Unit Control Settings"))
+            if (imGui.MenuItem("Unit Control"))
             {
                 WindowOpen = true;
             }
