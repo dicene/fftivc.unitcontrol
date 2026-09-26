@@ -166,8 +166,7 @@ namespace fftivc.unitcontrol
                 var lea_address = (nuint)(battleUnitsBase_address + BattleUnitsPatternLeaOffset);
                 _logger.WriteLineAsync($"[{_modConfig.ModId}] lea_address at 0x{lea_address:X}.", Color.LightGreen);
                 Memory.Instance.Read<int>(lea_address + 3, out int offsetAddress);
-                _logger.WriteLineAsync($"[{_modConfig.ModId}] offsetAddress at 0x{offsetAddress:X}.", Color.LightGreen);
-                _logger.WriteLineAsync($"[{_modConfig.ModId}] offsetAddress at {offsetAddress}.", Color.LightGreen);
+                _logger.WriteLineAsync($"[{_modConfig.ModId}] lea displacement 0x{offsetAddress:X}.", Color.LightGreen);
                 BattleUnitsBaseAddress = (nuint)((nint)lea_address + 7 + offsetAddress);
                 _logger.WriteLineAsync($"[{_modConfig.ModId}] BattleUnitsBase Address found at 0x{BattleUnitsBaseAddress:X}.", Color.LightGreen);
             };
@@ -192,8 +191,7 @@ namespace fftivc.unitcontrol
                 var call_address = (nuint)(TransitionIntoBattle_address);
                 _logger.WriteLineAsync($"[{_modConfig.ModId}] call at 0x{call_address:X}.", Color.LightGreen);
                 Memory.Instance.Read<int>(call_address + 1, out int offsetAddress);
-                _logger.WriteLineAsync($"[{_modConfig.ModId}] offsetAddress at 0x{offsetAddress:X}.", Color.LightGreen);
-                _logger.WriteLineAsync($"[{_modConfig.ModId}] offsetAddress at {offsetAddress}.", Color.LightGreen);
+                _logger.WriteLineAsync($"[{_modConfig.ModId}] call displacement 0x{offsetAddress:X}.", Color.LightGreen);
                 TransitionIntoBattleAddress = (nuint)((nint)call_address + 5 + offsetAddress);
                 _logger.WriteLineAsync($"[{_modConfig.ModId}] TransitionIntoBattle Address found at 0x{TransitionIntoBattleAddress:X}.", Color.LightGreen);
 
@@ -254,9 +252,6 @@ namespace fftivc.unitcontrol
             }
 
             _imGuiShell = imGuiShell;
-
-            _logger.WriteLineAsync($"[{_modConfig.ModId}] {imGui}.");
-            _logger.WriteLineAsync($"[{_modConfig.ModId}] {imGuiShell}.");
 
             settingsMenu = new UnitControlSettingsMenu(this);
             settingsMenu.imGui = imGui;
@@ -370,19 +365,19 @@ namespace fftivc.unitcontrol
 
                 if (isGuest)
                 {
-                    if (verbose && configuration.LoggingEnabled) _logger.WriteLine($"{i:d2}.) Guest        SpriteSet:0x{spriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{job:X2}, Flags1:0x{flags1:X2}, Flags2:0x{flags2:X2}, Flags2Copy:0x{flags2Mirror:X2}", Color.Goldenrod);
-                    SetUnitControlled(pBattleUnit, flags2, flags2Mirror, combinedFlags2, configuration.ControlGuests, "guest", unitIndex);
+                    if (verbose && configuration.LoggingEnabled) _logger.WriteLine($"[{_modConfig.ModId}] {i:d2} Guest SpriteSet:0x{spriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{job:X2}, Flags1:0x{flags1:X2}, Flags2:0x{flags2:X2}, Flags2Copy:0x{flags2Mirror:X2}", Color.Goldenrod);
+                    SetUnitControlled(pBattleUnit, flags2, flags2Mirror, combinedFlags2, configuration.ControlGuests, i, "Guest");
                 }
                 else if ((combinedFlags2 & BattleUnits.Flags2EnemyMask) != 0)
                 {
                     // Marked as Team 1 or Team 2
-                    if (verbose && configuration.LoggingEnabled) _logger.WriteLine($"{i:d2}.) Enemy        SpriteSet:0x{spriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{job:X2}, Flags1:0x{flags1:X2}, Flags2:0x{flags2:X2}, Flags2Copy:0x{flags2Mirror:X2}", Color.Salmon);
-                    SetUnitControlled(pBattleUnit, flags2, flags2Mirror, combinedFlags2, configuration.ControlEnemies, "enemy", unitIndex);
+                    if (verbose && configuration.LoggingEnabled) _logger.WriteLine($"[{_modConfig.ModId}] {i:d2} Enemy SpriteSet:0x{spriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{job:X2}, Flags1:0x{flags1:X2}, Flags2:0x{flags2:X2}, Flags2Copy:0x{flags2Mirror:X2}", Color.Salmon);
+                    SetUnitControlled(pBattleUnit, flags2, flags2Mirror, combinedFlags2, configuration.ControlEnemies, i, "Enemy");
                 }
                 else
                 {
-                    if (verbose && configuration.LoggingEnabled) _logger.WriteLine($"{i:d2}.) Player       SpriteSet:0x{spriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{job:X2}, Flags1:0x{flags1:X2}, Flags2:0x{flags2:X2}, Flags2Copy:0x{flags2Mirror:X2}", Color.Green);
-                    SetUnitControlled(pBattleUnit, flags2, flags2Mirror, combinedFlags2, configuration.ControlPlayerUnits, "player unit", unitIndex);
+                    if (verbose && configuration.LoggingEnabled) _logger.WriteLine($"[{_modConfig.ModId}] {i:d2} Player SpriteSet:0x{spriteSet:X2}, Index:0x{unitIndex:X2}, Job:0x{job:X2}, Flags1:0x{flags1:X2}, Flags2:0x{flags2:X2}, Flags2Copy:0x{flags2Mirror:X2}", Color.Green);
+                    SetUnitControlled(pBattleUnit, flags2, flags2Mirror, combinedFlags2, configuration.ControlPlayerUnits, i, "Player");
                 }
             }
         }
@@ -391,14 +386,16 @@ namespace fftivc.unitcontrol
         /// Brings <c>Flags2</c> and its mirror at <c>+0x1EE</c> in line with
         /// <paramref name="shouldControl"/>. Writes nothing when the unit already matches.
         /// </summary>
-        private void SetUnitControlled(nuint pBattleUnit, byte flags2, byte flags2Mirror, byte combinedFlags2, bool shouldControl, string kind, byte unitIndex)
+        /// <param name="slot">Array slot, logged only so a change can be lined up with a roster dump.</param>
+        /// <param name="label">Guest / Enemy / Player, matching the roster dump.</param>
+        private void SetUnitControlled(nuint pBattleUnit, byte flags2, byte flags2Mirror, byte combinedFlags2, bool shouldControl, int slot, string label)
         {
             if (shouldControl == ((combinedFlags2 & BattleUnits.Flags2HumanControl) != 0))
             {
                 return;
             }
 
-            if (_configuration.LoggingEnabled) _logger.WriteLine($"                  {(shouldControl ? "Giving" : "Removing")} control of {kind} 0x{unitIndex:X2}...");
+            if (_configuration.LoggingEnabled) _logger.WriteLine($"[{_modConfig.ModId}] {slot:d2} {label} -> {(shouldControl ? "Giving" : "Removing")} control");
 
             var control = BattleUnits.Flags2HumanControl;
             Memory.Instance.Write<byte>(pBattleUnit + BattleUnits.OffsetFlags2, shouldControl ? (byte)(flags2 | control) : (byte)(flags2 & ~control));
