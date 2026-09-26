@@ -76,6 +76,45 @@ namespace fftivc.unitcontrol
             return ret;
         }
 
+        /// <summary>
+        /// AOB for <c>NewEntry</c>. Matches exactly once in both supported builds:
+        /// <c>0x1403041A4</c> in 1.5.2 and <c>0x14FA2BE60</c> in 1.2.0.
+        /// </summary>
+        private const string NewEntryPattern = "48 63 05 ?? ?? ?? ?? 4C 8D 15 ?? ?? ?? ?? 48 C1 E0 ?? 42 88 4C 10";
+
+        // Real prototype (1.5.2):
+        //   __int64 NewEntry(int x, int y, __int16 facingHi, __int16 facingLo, __int16 job,
+        //                    __int16 a6, __int16 a7, BWORK *pBattleUnit, int flag);
+        // Declared as pass-through Int64s so the trampoline cannot alter the argument slots.
+        [Function(CallingConventions.Microsoft)]
+        private delegate Int64 NewEntry(Int64 x, Int64 y, Int64 facingHi, Int64 facingLo, Int64 job, Int64 a6, Int64 a7, Int64 pBattleUnit, Int64 flag);
+        private IHook<NewEntry> NewEntry_Hook;
+
+        /// <summary>
+        /// Fires for every unit that appears on the field - battle start and mid-battle alike - and
+        /// re-applies unit control so newly added units are covered.
+        /// <para>
+        /// <c>NewEntry</c> appends the unit to the 16-entry <c>gEntryArray</c> presentation table and
+        /// is the one funnel shared by every placement path: <c>set_playerwork_common</c>,
+        /// <c>set_playerwork_single</c> and <c>set_monsterwork</c> at battle start,
+        /// <c>PlaceUnitAtActivePanel</c> mid-battle, and - the case the other hooks missed - the
+        /// battle event script (<c>event_maincommon_0</c>) via <c>requestNewAnimation</c> /
+        /// <c>requestEntryAnimation</c>.
+        /// </para>
+        /// <para>
+        /// The unit pointer arrives in <c>pBattleUnit</c>, so a per-unit application is possible if
+        /// the whole-array sweep ever becomes too chatty; for now the sweep keeps one code path.
+        /// </para>
+        /// </summary>
+        private Int64 NewEntry_Replacement(Int64 x, Int64 y, Int64 facingHi, Int64 facingLo, Int64 job, Int64 a6, Int64 a7, Int64 pBattleUnit, Int64 flag)
+        {
+            var ret = NewEntry_Hook.OriginalFunction(x, y, facingHi, facingLo, job, a6, a7, pBattleUnit, flag);
+
+            UpdateUnitControl();
+
+            return ret;
+        }
+
         private IImGui _imGui;
         private IImGuiShell _imGuiShell;
 
@@ -162,6 +201,32 @@ namespace fftivc.unitcontrol
                 _logger.WriteLineAsync($"[{_modConfig.ModId}] Hooked TransitionIntoBattle function at 0x{TransitionIntoBattleAddress:X}.", Color.LightGreen);
             };
             startupScanner.AddMainModuleScan("E8 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? 48 85 C9 74 ?? E8 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 84 C0 74", TransitionIntoBattleAction);
+
+            // Unit appearance hook: covers reinforcements and event-script unit additions, which the
+            // battle transition hook above does not see.
+            Action<Reloaded.Memory.Sigscan.Definitions.Structs.PatternScanResult> NewEntryAction = result =>
+            {
+                if (!result.Found)
+                {
+                    _logger.WriteLineAsync($"[{_modConfig.ModId}] Failed to find AoB pattern for NewEntry!", Color.OrangeRed);
+                    return;
+                }
+
+                var newEntry_address = Process.GetCurrentProcess().MainModule.BaseAddress + result.Offset;
+
+                _logger.WriteLineAsync($"[{_modConfig.ModId}] NewEntry AOB found at 0x{newEntry_address:X}.", Color.LightGreen);
+
+                NewEntry_Hook = _hooks!.CreateHook<NewEntry>(NewEntry_Replacement, newEntry_address.ToInt64()).Activate();
+
+                if (!NewEntry_Hook.IsHookEnabled)
+                {
+                    _logger.WriteLineAsync($"[{_modConfig.ModId}] Failed to hook NewEntry function at 0x{newEntry_address:X}.", Color.OrangeRed);
+                    return;
+                }
+
+                _logger.WriteLineAsync($"[{_modConfig.ModId}] Hooked NewEntry function at 0x{newEntry_address:X}.", Color.LightGreen);
+            };
+            startupScanner.AddMainModuleScan(NewEntryPattern, NewEntryAction);
 
             var imGuiController = _modLoader.GetController<IImGui>();
 
