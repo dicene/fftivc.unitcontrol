@@ -2,7 +2,7 @@
   "ModId": "fftivc.unitcontrol",
   "ModName": "Unit Control",
   "ModAuthor": "Dicene",
-  "ModVersion": "1.0.0",
+  "ModVersion": "1.1.1",
   "ModDescription": "Change human vs computer control of your units, guests, and enemy units.",
   "ModDll": "fftivc.unitcontrol.dll",
   "ModIcon": "Preview.png",
@@ -44,15 +44,6 @@
           },
           "ReleaseMetadataName": "Sewer56.Update.ReleaseMetadata.json"
         },
-        "SharedScans.Reloaded": {
-          "Config": {
-            "UserName": "RyoTune",
-            "RepositoryName": "SharedScans",
-            "UseReleaseTag": false,
-            "AssetFileName": "Mod.zip"
-          },
-          "ReleaseMetadataName": "SharedScans.Reloaded.ReleaseMetadata.json"
-        },
         "ff16.utility.framework": {
           "Config": {
             "UserName": "Nenkai",
@@ -75,8 +66,7 @@
   "ModDependencies": [
     "ff16.utility.framework",
     "Reloaded.Memory.SigScan.ReloadedII",
-    "reloaded.sharedlib.hooks",
-    "SharedScans.Reloaded"
+    "reloaded.sharedlib.hooks"
   ],
   "OptionalDependencies": [],
   "SupportedAppId": [
